@@ -482,12 +482,16 @@ class EnVariationalDiffusion(torch.nn.Module):
 
         # Compute mu for p(zs | zt).
         mu_x = self.compute_x_pred(net_out, z0, gamma_0)
+        #print(z0[:,:,:3])
+        #print("mu_x", mu_x[:,:,:3])
+        #print("sigma_x", sigma_x)
         xh = self.sample_normal(mu=mu_x, sigma=sigma_x, node_mask=node_mask, fix_noise=fix_noise)
 
         x = xh[:, :, :self.n_dims]
 
         h_int = z0[:, :, -1:] if self.include_charges else torch.zeros(0).to(z0.device)
         x, h_cat, h_int = self.unnormalize(x, z0[:, :, self.n_dims:-1], h_int, node_mask)
+        #print("x", x)
 
         h_cat = F.one_hot(torch.argmax(h_cat, dim=2), self.num_classes) * node_mask
         h_int = torch.round(h_int).long() * node_mask
@@ -758,20 +762,34 @@ class EnVariationalDiffusion(torch.nn.Module):
         return z
 
     @torch.no_grad()
-    def sample(self, n_samples, n_nodes, node_mask, edge_mask, context, fix_noise=False):
+    def sample(self, n_samples, n_nodes, node_mask, edge_mask, context, fix_noise=False, start_T=None):
         """
         Draw samples from the generative model.
         """
-        if fix_noise:
-            # Noise is broadcasted over the batch axis, useful for visualizations.
-            z = self.sample_combined_position_feature_noise(1, n_nodes, node_mask)
+        if start_T is None:
+            start_T = self.T
+        if isinstance(fix_noise, dict):
+            x = fix_noise["x"]
+            h = {"categorical": fix_noise["h_categorical"],
+                 "integer": fix_noise["h_integer"]}
+            x_normed, h_normed, _ = self.normalize(x, h, node_mask)
+            #print(x_normed.shape, h_normed["categorical"].shape, h_normed["integer"].shape)
+            z = torch.cat([x_normed, h_normed["categorical"], h_normed["integer"]], dim=2)
+            fix_noise = True
         else:
-            z = self.sample_combined_position_feature_noise(n_samples, n_nodes, node_mask)
+            if fix_noise:
+                # Noise is broadcasted over the batch axis, useful for visualizations.
+                z = self.sample_combined_position_feature_noise(1, n_nodes, node_mask)
+            else:
+                z = self.sample_combined_position_feature_noise(n_samples, n_nodes, node_mask)
 
         diffusion_utils.assert_mean_zero_with_mask(z[:, :, :self.n_dims], node_mask)
 
+        chain = torch.zeros((start_T + 1,) + z.size(), device=z.device)
+
         # Iteratively sample p(z_s | z_t) for t = 1, ..., T, with s = t - 1.
-        for s in reversed(range(0, self.T)):
+        for s in reversed(range(0, start_T)):
+            #print("step {} / {}".format(self.T - s, self.T))
             s_array = torch.full((n_samples, 1), fill_value=s, device=z.device)
             t_array = s_array + 1
             s_array = s_array / self.T
@@ -779,10 +797,14 @@ class EnVariationalDiffusion(torch.nn.Module):
 
             z = self.sample_p_zs_given_zt(s_array, t_array, z, node_mask, edge_mask, context, fix_noise=fix_noise)
 
+            chain[s + 1] = self.unnormalize_z(z, node_mask)
+
         # Finally sample p(x, h | z_0).
         x, h = self.sample_p_xh_given_z0(z, node_mask, edge_mask, context, fix_noise=fix_noise)
-
         diffusion_utils.assert_mean_zero_with_mask(x, node_mask)
+
+        chain[0] = torch.cat([x, h["categorical"], h["integer"]], dim=2)
+        chain_flat = chain.view(n_samples * (start_T + 1), *z.size()[1:])
 
         max_cog = torch.sum(x, dim=1, keepdim=True).abs().max().item()
         if max_cog > 5e-2:
@@ -790,7 +812,8 @@ class EnVariationalDiffusion(torch.nn.Module):
                   f'the positions down.')
             x = diffusion_utils.remove_mean_with_mask(x, node_mask)
 
-        return x, h
+        #print("chain_flat.shape", chain_flat.shape)
+        return x, h, chain_flat
 
     @torch.no_grad()
     def sample_chain(self, n_samples, n_nodes, node_mask, edge_mask, context, keep_frames=None):

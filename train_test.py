@@ -165,9 +165,10 @@ def sample_different_sizes_and_save(model, nodes_dist, args, device, dataset_inf
     batch_size = min(batch_size, n_samples)
     for counter in range(int(n_samples/batch_size)):
         nodesxsample = nodes_dist.sample(batch_size)
-        one_hot, charges, x, node_mask = sample(args, device, model, prop_dist=prop_dist,
-                                                nodesxsample=nodesxsample,
-                                                dataset_info=dataset_info)
+        one_hot, charges, x, node_mask, chain = sample(
+                args, device, model, prop_dist=prop_dist,
+                nodesxsample=nodesxsample, dataset_info=dataset_info
+            )
         print(f"Generated molecule: Positions {x[:-1, :, :]}")
         vis.save_xyz_file(f'outputs/{args.exp_name}/epoch_{epoch}_{batch_id}/', one_hot, charges, x, dataset_info,
                           batch_size * counter, name='molecule')
@@ -181,8 +182,10 @@ def analyze_and_save(epoch, model_sample, nodes_dist, args, device, dataset_info
     molecules = {'one_hot': [], 'x': [], 'node_mask': []}
     for i in range(int(n_samples/batch_size)):
         nodesxsample = nodes_dist.sample(batch_size)
-        one_hot, charges, x, node_mask = sample(args, device, model_sample, dataset_info, prop_dist,
-                                                nodesxsample=nodesxsample)
+        one_hot, charges, x, node_mask, chain = sample(
+                args, device, model_sample, dataset_info,
+                prop_dist, nodesxsample=nodesxsample
+            )
 
         molecules['one_hot'].append(one_hot.detach().cpu())
         molecules['x'].append(x.detach().cpu())
