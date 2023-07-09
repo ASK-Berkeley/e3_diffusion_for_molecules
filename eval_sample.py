@@ -39,9 +39,9 @@ def save_and_sample_chain(args, eval_args, device, flow,
             join(eval_args.model_path, target_path), one_hot, charges, x,
             dataset_info, id_from, name='chain')
 
-        vis.visualize_chain_uncertainty(
-            join(eval_args.model_path, target_path), dataset_info,
-            spheres_3d=True)
+        #vis.visualize_chain_uncertainty(
+        #    join(eval_args.model_path, target_path), dataset_info,
+        #    spheres_3d=True)
 
     return one_hot, charges, x
 
@@ -139,6 +139,7 @@ def main():
 
     flow.load_state_dict(flow_state_dict)
 
+    """
     print('Sampling handful of molecules.')
     sample_different_sizes_and_save(
         args, eval_args, device, flow, nodes_dist,
@@ -152,6 +153,7 @@ def main():
     vis.visualize(
         join(eval_args.model_path, 'eval/molecules/'), dataset_info,
         max_num=100, spheres_3d=True)
+    """
 
     print('Sampling visualization chain.')
     save_and_sample_chain(
