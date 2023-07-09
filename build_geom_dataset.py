@@ -3,6 +3,7 @@ import os
 import numpy as np
 import torch
 from torch.utils.data import BatchSampler, DataLoader, Dataset, SequentialSampler
+from torch.utils.data.distributed import DistributedSampler
 import argparse
 from qm9.data import collate as qm9_collate
 
@@ -103,7 +104,10 @@ def load_split_data(conformation_file, val_proportion=0.1, test_proportion=0.1,
     num_mol = len(data_list)
     val_index = int(num_mol * val_proportion)
     test_index = val_index + int(num_mol * test_proportion)
-    val_data, test_data, train_data = np.split(data_list, [val_index, test_index])
+    #val_data, test_data, train_data = np.split(data_list, [val_index, test_index])
+    val_data = data_list[:val_index]
+    test_data = data_list[val_index:test_index]
+    train_data = data_list[test_index:]
     return train_data, val_data, test_data
 
 
@@ -188,13 +192,12 @@ def collate_fn(batch):
 
 class GeomDrugsDataLoader(DataLoader):
     def __init__(self, sequential, dataset, batch_size, shuffle, drop_last=False):
-
+        sampler = DistributedSampler(dataset, shuffle=shuffle, drop_last=drop_last)
         if sequential:
             # This goes over the data sequentially, advantage is that it takes
             # less memory for smaller molecules, but disadvantage is that the
             # model sees very specific orders of data.
             assert not shuffle
-            sampler = SequentialSampler(dataset)
             batch_sampler = CustomBatchSampler(sampler, batch_size, drop_last,
                                                dataset.split_indices)
             super().__init__(dataset, batch_sampler=batch_sampler)
@@ -202,8 +205,8 @@ class GeomDrugsDataLoader(DataLoader):
         else:
             # Dataloader goes through data randomly and pads the molecules to
             # the largest molecule size.
-            super().__init__(dataset, batch_size, shuffle=shuffle,
-                             collate_fn=collate_fn, drop_last=drop_last)
+            super().__init__(dataset, batch_size, collate_fn=collate_fn,
+                             drop_last=drop_last, sampler=sampler)
 
 
 class GeomDrugsTransform(object):
