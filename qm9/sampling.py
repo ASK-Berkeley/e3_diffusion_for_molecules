@@ -76,7 +76,7 @@ def sample_chain(args, device, flow, n_tries, dataset_info, prop_dist=None):
     if args.probabilistic_model == 'diffusion':
         one_hot, charges, x = None, None, None
         for i in range(n_tries):
-            chain = flow.sample_chain(n_samples, n_nodes, node_mask, edge_mask, context, keep_frames=100)
+            chain = flow.sample_chain(n_samples, n_nodes, node_mask, edge_mask, context, keep_frames=1000)
             chain = reverse_tensor(chain)
 
             # Repeat last frame to see final sample better.
