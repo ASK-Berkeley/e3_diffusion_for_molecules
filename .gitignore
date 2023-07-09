@@ -13,7 +13,7 @@ qm9/temp/*
 kohler/qm9/temp/*
 push.sj
 bash_qm9.sh
-outputs/*
+outputs
 bash_dw4.sh
 bash_qm9pos.sh
 bash_qm9_analyze.sh
