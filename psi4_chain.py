@@ -15,17 +15,18 @@ from psi4.driver.p4util.exceptions import OptimizationConvergenceError
 def xyz_to_mol(xyz_fn):
     return ase.io.read(xyz_fn, format="xyz")
 
-def get_psi4_calc(atoms):
+def get_psi4_calc(atoms, num_threads=1):
     # qm9 functional/basis
-    return Psi4(atoms=atoms, method="B3LYP", basis="6-31G_2df_p_", memory="16GB", num_threads=8)
+    return Psi4(atoms=atoms, method="B3LYP", basis="6-31G_2df_p_",
+                memory="16GB", num_threads=num_threads)
     # faster/less accurate
     #return Psi4(atoms=atoms, method="pbe", basis="6-31g", memory="16GB", num_threads=8)
 
     # I think cc-pVDZ is more common than 6-31G(2df,p)
     #return Psi4(atoms=atoms, method="B3LYP", basis="cc-pVDZ", memory="16GB", num_threads=8)
 
-def get_ef(atoms):
-    calc = get_psi4_calc(atoms)
+def get_ef(atoms, num_threads=1):
+    calc = get_psi4_calc(atoms, num_threads=num_threads)
     atoms.calc = calc
     return atoms.get_potential_energy(), atoms.get_forces()
 

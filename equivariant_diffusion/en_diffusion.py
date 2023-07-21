@@ -762,7 +762,7 @@ class EnVariationalDiffusion(torch.nn.Module):
         return z
 
     @torch.no_grad()
-    def sample(self, n_samples, n_nodes, node_mask, edge_mask, context, fix_noise=False, start_T=None):
+    def sample(self, n_samples, n_nodes, node_mask, edge_mask, context, fix_noise=False, start_T=None, end_T=0):
         """
         Draw samples from the generative model.
         """
@@ -789,6 +789,8 @@ class EnVariationalDiffusion(torch.nn.Module):
 
         # Iteratively sample p(z_s | z_t) for t = 1, ..., T, with s = t - 1.
         for s in reversed(range(0, start_T)):
+            if s < end_T:
+                break
             #print("step {} / {}".format(self.T - s, self.T))
             s_array = torch.full((n_samples, 1), fill_value=s, device=z.device)
             t_array = s_array + 1
