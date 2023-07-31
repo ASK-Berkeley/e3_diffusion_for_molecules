@@ -1,3 +1,4 @@
+from matplotlib import pyplot as plt
 import numpy as np
 from openbabel import openbabel as ob
 from rdkit import Chem
@@ -6,16 +7,29 @@ from rdkit.Chem.rdmolfiles import MolFromXYZBlock
 from psi4_chain import get_ef
 import ase
 from ase import Atoms
+from ase.visualize import view
 import os
+import time
 
 # Load the molecule
 
 def main():
-    gs_fn = "outputs/qm9_mc/flexible_mols/mcmc/T75/0074/gs.xyz"
-    temperature = 100  # in Kelvin
-    out_dir = "outputs/qm9_mc/flexible_mols/mcmc/T{}/0074/".format(temperature)
-    energies, accept_rate = run_mcmc(gs_fn, temperature, out_dir)
+    #0074  0403  0550  0622  0777  ->0832  1050  1259  1289  1408
+    gs_fn = "outputs/qm9_mc/flexible_mols/T75/0074/gs.xyz"
+    out_dir = "outputs/qm9_mc/flexible_mols/mcmc/T75/0074/"
+    temperature = 350  # in Kelvin
+    energies, dihedral, all_atoms, accept_rate = run_mcmc(gs_fn, temperature, out_dir=None)
+    print("accept:", accept_rate)
+    plt.hist(energies[2000:], bins=50)
 
+    plt.figure()
+    plt.plot(energies)
+    plt.figure()
+    plt.plot(dihedral)
+    plt.show()
+    view(all_atoms)
+
+    return
     out_fn = os.path.join(out_dir, "psi4_mcmc_energies_{}.txt".format(temperature))
     with open(out_fn, "w") as f:
         for e in energies:
@@ -49,9 +63,11 @@ def rdkit_to_ase(rdkit_mol):
     return ase_atoms
 
 def get_energy(mol):
-    #ff = AllChem.MMFFGetMoleculeForceField(mol, AllChem.MMFFGetMoleculeProperties(mol))
+    #return AllChem.UFFGetMoleculeForceField(mol).CalcEnergy()
+
+    ff = AllChem.MMFFGetMoleculeForceField(mol, AllChem.MMFFGetMoleculeProperties(mol))
     # Get the energy of the current state
-    #return ff.CalcEnergy()
+    return ff.CalcEnergy()
 
     e, f = get_ef(rdkit_to_ase(mol), num_threads=32)
     return e
@@ -66,6 +82,11 @@ def run_mcmc(gs_fn, temperature, out_dir):
     # Convert the Open Babel molecule to an RDKit molecule
     mol_block = obConversion.WriteString(mol)
     rdkit_mol = Chem.MolFromMolBlock(mol_block, removeHs=False)
+    AllChem.MMFFOptimizeMolecule(rdkit_mol)
+
+    #rdkit_mol = Chem.MolFromSmiles("CC")
+    #rdkit_mol = AllChem.AddHs(rdkit_mol)
+    #AllChem.EmbedMolecule(rdkit_mol)
 
     # Get ground-state energy first
     gs_energy = get_energy(rdkit_mol)
@@ -94,15 +115,18 @@ def run_mcmc(gs_fn, temperature, out_dir):
 
     # Initialize an empty list to save the energies
     energies = []
+    dihedral = []
+    all_atoms = []
 
     # MCMC parameters
-    n_steps = 5000
+    n_steps = (5000 - 500) * 5 + 2000
     k_B = 0.0019872041  # Boltzmann constant in kcal/mol/K
 
     energy = gs_energy
     n_accepts = 0
     n_rejects = 0
     # Run the MCMC
+    start_time = time.time()
     for step in range(n_steps):
 
         energies.append(energy - gs_energy)
@@ -132,14 +156,19 @@ def run_mcmc(gs_fn, temperature, out_dir):
                 conf.SetAtomPosition(i, old_positions[i])
             n_rejects += 1
 
+
         atoms = rdkit_to_ase(rdkit_mol)
-        ase.io.write(os.path.join(out_dir, "step_{:0>4d}.xyz".format(step)), atoms)
+        all_atoms.append(atoms)
+        dihedral.append(atoms.get_dihedral(2, 0, 1, 6))
+        if out_dir is not None:
+            ase.io.write(os.path.join(out_dir, "step_{:0>4d}.xyz".format(step)), atoms)
 
 
+    print("time", time.time() - start_time)
     # Convert the energies to a numpy array for further processing
     energies = np.array(energies)
     accept_rate = n_accepts / (n_accepts + n_rejects)
-    return energies, accept_rate
+    return energies, dihedral, all_atoms, accept_rate
 
 if __name__ == "__main__":
     main()
