@@ -12,8 +12,8 @@ import os
 
 def main():
     gs_fn = "outputs/qm9_mc/flexible_mols/mcmc/T75/0074/gs.xyz"
-    out_dir = "outputs/qm9_mc/flexible_mols/mcmc/T75/0074/"
-    temperature = 75  # in Kelvin
+    temperature = 100  # in Kelvin
+    out_dir = "outputs/qm9_mc/flexible_mols/mcmc/T{}/0074/".format(temperature)
     energies, accept_rate = run_mcmc(gs_fn, temperature, out_dir)
 
     out_fn = os.path.join(out_dir, "psi4_mcmc_energies_{}.txt".format(temperature))
@@ -113,7 +113,7 @@ def run_mcmc(gs_fn, temperature, out_dir):
         for i in range(rdkit_mol.GetNumAtoms()):
             position = np.array(conf.GetAtomPosition(i))
             old_positions.append(position)
-            new_position = position + 3e-2 * np.random.normal(0, np.sqrt(k_B * temperature), 3)
+            new_position = position + 4e-2 * np.random.normal(0, np.sqrt(k_B * temperature), 3)
             conf.SetAtomPosition(i, new_position)
 
         # Get the energy of the new state
