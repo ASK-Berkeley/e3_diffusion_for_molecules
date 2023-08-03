@@ -58,6 +58,7 @@ def xyz_to_rdkit(symbols, xyz):
     # Convert the Open Babel molecule to an RDKit molecule
     mol_block = obConversion.WriteString(mol)
     mol = Chem.MolFromMolBlock(mol_block, removeHs=False)
+    return mol
 
 
 def main(model_path, epoch, start_T, dataset_name="qm9"):
