@@ -134,6 +134,8 @@ def main():
         if rank == 0:
             print(f'Training using {torch.cuda.device_count()} GPUs')
         device_id = rank % torch.cuda.device_count()
+        torch.cuda.set_device(rank)
+        torch.cuda.empty_cache()
 
     device = torch.device("cuda:{}".format(device_id) if args.cuda else "cpu")
     print("rank = ", rank, "; device =", device)
