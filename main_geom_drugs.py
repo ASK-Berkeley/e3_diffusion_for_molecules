@@ -3,6 +3,8 @@ try:
     from rdkit import Chem
 except ModuleNotFoundError:
     pass
+
+import multiprocessing
 import build_geom_dataset
 from configs.datasets_config import geom_with_h
 import copy
@@ -170,7 +172,7 @@ def main():
         resume = args.resume
         wandb_usr = args.wandb_usr
 
-        with open(join(args.resume, 'args.pickle'), 'rb') as f:
+        with open(join(args.resume, 'args_pretrained.pickle'), 'rb') as f:
             args = pickle.load(f)
         args.resume = resume
         args.break_train_epoch = False
@@ -222,11 +224,21 @@ def main():
     gradnorm_queue.add(3000)  # Add large value that will be flushed.
 
     if args.resume is not None:
+        ema_fn = "generative_model_ema_pretrained.npy"
+        non_ema_fn = "generative_model_pretrained.npy"
+        model_fn = ema_fn if args.ema_decay > 0 else non_ema_fn
+        model_fn = join(args.resume, model_fn)
+        state_dict = torch.load(model_fn, map_location=device)
+        model.load_state_dict(state_dict)
+
+
+        """
         flow_state_dict = torch.load(join(args.resume, 'flow.npy'))
         dequantizer_state_dict = torch.load(join(args.resume, 'dequantizer.npy'))
         optim_state_dict = torch.load(join(args.resume, 'optim.npy'))
         model.load_state_dict(flow_state_dict)
         optim.load_state_dict(optim_state_dict)
+        """
 
     # Initialize dataparallel if enabled and possible.
     if args.dp and torch.cuda.device_count() > 1 and args.cuda:
