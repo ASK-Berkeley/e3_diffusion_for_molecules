@@ -210,6 +210,8 @@ def main():
     args.context_node_nf = context_node_nf
 
 
+    torch.cuda.set_device(device)
+    torch.cuda.empty_cache()
     # Create EGNN flow
     model, nodes_dist, prop_dist = get_model(args, device, dataset_info, dataloader_train=dataloaders['train'])
     model = model.to(device)
@@ -229,7 +231,7 @@ def main():
     # Initialize dataparallel if enabled and possible.
     if args.dp and torch.cuda.device_count() > 1 and args.cuda:
         print(f'Training using {torch.cuda.device_count()} GPUs')
-        model_dp = DDP(model.to(device), device_ids=[device_id])
+        model_dp = DDP(model, device_ids=[device_id])
     else:
         model_dp = model
 
@@ -239,7 +241,7 @@ def main():
         ema = diffusion_utils.EMA(args.ema_decay)
 
         if args.dp and torch.cuda.device_count() > 1:
-            model_ema_dp = DDP(model_ema.to(device), device_ids=[device_id])
+            model_ema_dp = DDP(model_ema, device_ids=[device_id])
         else:
             model_ema_dp = model_ema
     else:
@@ -265,7 +267,8 @@ def main():
             if not args.break_train_epoch:
                 train_test.analyze_and_save(epoch, model_ema, nodes_dist, args,
                                             device, dataset_info, prop_dist,
-                                            n_samples=args.n_stability_samples)
+                                            n_samples=args.n_stability_samples,
+                                            batch_size=20)
             nll_val = train_test.test(args, dataloaders['val'], epoch,
                                       model_ema_dp, device, dtype,
                                       property_norms, nodes_dist, partition='Val')
@@ -301,4 +304,5 @@ def main():
 
 
 if __name__ == "__main__":
+    multiprocessing.set_start_method("spawn")
     main()
