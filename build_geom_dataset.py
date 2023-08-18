@@ -192,12 +192,12 @@ def collate_fn(batch):
 
 class GeomDrugsDataLoader(DataLoader):
     def __init__(self, sequential, dataset, batch_size, shuffle, drop_last=False):
-        sampler = DistributedSampler(dataset, shuffle=shuffle, drop_last=drop_last)
         if sequential:
             # This goes over the data sequentially, advantage is that it takes
             # less memory for smaller molecules, but disadvantage is that the
             # model sees very specific orders of data.
             assert not shuffle
+            sampler = SequentialSampler(dataset)
             batch_sampler = CustomBatchSampler(sampler, batch_size, drop_last,
                                                dataset.split_indices)
             super().__init__(dataset, batch_sampler=batch_sampler)
@@ -205,8 +205,13 @@ class GeomDrugsDataLoader(DataLoader):
         else:
             # Dataloader goes through data randomly and pads the molecules to
             # the largest molecule size.
-            super().__init__(dataset, batch_size, collate_fn=collate_fn,
-                             drop_last=drop_last, sampler=sampler)
+            if torch.distributed.is_initialized():
+                sampler = DistributedSampler(dataset, shuffle=shuffle, drop_last=drop_last)
+                super().__init__(dataset, batch_size, collate_fn=collate_fn,
+                                 drop_last=drop_last, sampler=sampler)
+            else:
+                super().__init__(dataset, batch_size, shuffle=shuffle,
+                                 collate_fn=collate_fn, drop_last=drop_last)
 
 
 class GeomDrugsTransform(object):
