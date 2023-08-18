@@ -278,7 +278,7 @@ def main():
             if isinstance(model, en_diffusion.EnVariationalDiffusion):
                 wandb.log(model.log_info(), commit=True)
 
-            if not args.break_train_epoch:
+            if not args.break_train_epoch and rank in [-1, 0]:
                 train_test.analyze_and_save(epoch, model_ema, nodes_dist, args,
                                             device, dataset_info, prop_dist,
                                             n_samples=args.n_stability_samples,
