@@ -7,6 +7,7 @@ from rdkit.Chem.rdmolfiles import MolFromXYZBlock
 from psi4_chain import get_ef
 import ase
 from ase import Atoms
+from ase import units
 from ase.visualize import view
 import os
 import time
@@ -81,15 +82,18 @@ def rdkit_to_ase(rdkit_mol):
 
     return ase_atoms
 
-def get_energy(mol):
+def get_energy(mol, atoms=None):
     #return AllChem.UFFGetMoleculeForceField(mol).CalcEnergy()
 
-    ff = AllChem.MMFFGetMoleculeForceField(mol, AllChem.MMFFGetMoleculeProperties(mol))
+    #ff = AllChem.MMFFGetMoleculeForceField(mol, AllChem.MMFFGetMoleculeProperties(mol))
     # Get the energy of the current state
-    return ff.CalcEnergy()
+    #return ff.CalcEnergy()
 
-    e, f = get_ef(rdkit_to_ase(mol), num_threads=32)
-    return e
+    if atoms is None:
+        e, f = get_ef(rdkit_to_ase(mol), num_threads=32)
+    else:
+        e, f = get_ef(atoms, num_threads=32)
+    return e / (units.kcal / units.mol)
 
 def get_rotatable_bonds(mol):
     """
