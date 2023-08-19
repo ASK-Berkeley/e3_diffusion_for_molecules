@@ -144,7 +144,7 @@ def get_rotatable_bonds(mol):
                     rotatable_bonds.append((head_idx, a1, a2, tail_idx))
     return rotatable_bonds
 
-def run_mcmc(gs_fn, temperature, out_dir):
+def run_mcmc(gs_fn, temperature, n_steps, out_dir):
     # Load the molecule with Open Babel and infer the bonds
     obConversion = ob.OBConversion()
     obConversion.SetInAndOutFormats("xyz", "mol")
@@ -193,8 +193,8 @@ def run_mcmc(gs_fn, temperature, out_dir):
     all_atoms = []
 
     # MCMC parameters
-    n_steps = (5000 - 500) * 5 + 2000
-    n_steps = 100000
+    #n_steps = (5000 - 500) * 5 + 2000
+    #n_steps = 100000
     k_B = 0.0019872041  # Boltzmann constant in kcal/mol/K
 
     energy = gs_energy
