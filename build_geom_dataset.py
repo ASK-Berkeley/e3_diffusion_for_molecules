@@ -216,7 +216,7 @@ class GeomDrugsDataLoader(DataLoader):
 
 class GeomDrugsTransform(object):
     def __init__(self, dataset_info, include_charges, device, sequential):
-        self.atomic_number_list = torch.Tensor(dataset_info['atomic_nb'])[None, :]
+        self.atomic_number_list = dataset_info['atomic_nb']
         self.device = device
         self.include_charges = include_charges
         self.sequential = sequential
@@ -226,7 +226,7 @@ class GeomDrugsTransform(object):
         new_data = {}
         new_data['positions'] = torch.from_numpy(data[:, -3:])
         atom_types = torch.from_numpy(data[:, 0].astype(int)[:, None])
-        one_hot = atom_types == self.atomic_number_list
+        one_hot = atom_types == torch.tensor(self.atomic_number_list)[None,:]
         new_data['one_hot'] = one_hot
         if self.include_charges:
             new_data['charges'] = torch.zeros(n, 1, device=self.device)
