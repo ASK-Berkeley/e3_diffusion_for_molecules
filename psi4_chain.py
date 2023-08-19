@@ -8,35 +8,66 @@ from ase.io import xyz
 from ase.optimize import BFGS
 from ase import units
 from ase.calculators.psi4 import Psi4
+from ase.calculators.calculator import CalculationFailed
+from xtb.ase.calculator import XTB
 from ase.build import molecule
 from psi4.driver.p4util.exceptions import OptimizationConvergenceError
-
+from qcelemental.exceptions import ValidationError
 
 def xyz_to_mol(xyz_fn):
     return ase.io.read(xyz_fn, format="xyz")
 
-def get_psi4_calc(atoms, num_threads=1):
+def get_xtb_calc():
+    return XTB(method="GFN2-xTB")
+
+def get_psi4_calc(atoms, basis="6-31G_2df_p_", num_threads=1):
     # qm9 functional/basis
-    return Psi4(atoms=atoms, method="B3LYP", basis="6-31G_2df_p_",
-                memory="16GB", num_threads=num_threads)
+    try:
+        return Psi4(atoms=atoms, method="B3LYP", basis=basis,
+                    memory="16GB", num_threads=num_threads)
+    except ValidationError as err:
+        return None
+        print("WARNING: psi4 failed on atoms:")
+        print(atoms.symbols)
+        print(atoms.positions)
+        print(err)
+        breakpoint()
+        return None
     # faster/less accurate
     #return Psi4(atoms=atoms, method="pbe", basis="6-31g", memory="16GB", num_threads=8)
 
     # I think cc-pVDZ is more common than 6-31G(2df,p)
     #return Psi4(atoms=atoms, method="B3LYP", basis="cc-pVDZ", memory="16GB", num_threads=8)
 
-def get_ef(atoms, num_threads=1):
-    calc = get_psi4_calc(atoms, num_threads=num_threads)
-    atoms.calc = calc
-    return atoms.get_potential_energy(), atoms.get_forces()
+def get_ef(atoms, method="psi4", basis="6-31G_2df_p_", num_threads=1):
+    if method == "psi4":
+        calc = get_psi4_calc(atoms, basis=basis, num_threads=num_threads)
+    elif method == "xtb":
+        calc = get_xtb_calc()
 
-def relax(atoms):
+    if calc is None:
+        return 0, np.zeros_like(atoms.get_positions())
+    atoms.calc = calc
+    try:
+        return atoms.get_potential_energy(), atoms.get_forces()
+    except CalculationFailed as err:
+        print("WARNING: Calculation Failed on atoms:")
+        ase.io.write("-", atoms, format="xyz")
+        return np.nan, np.nan * np.ones_like(atoms.get_positions())
+
+def relax(atoms, method="psi4", basis="6-31G_2df_p_", fmax=0.03, num_threads=1):
     atoms = ase.Atoms(atoms)
-    calc = get_psi4_calc(atoms)
+    if method == "psi4":
+        calc = get_psi4_calc(atoms, basis=basis, num_threads=num_threads)
+    elif method == "xtb":
+        calc = get_xtb_calc()
+
+    if calc is None:
+        return False, atoms, 0
     atoms.calc = calc
     opt = BFGS(atoms)
-    opt.run(fmax=0.01)
-    return atoms
+    opt.run(fmax=fmax)
+    return True, atoms, opt.get_number_of_steps()
 
 def chain_fn(chain_id, frame_id):
     fn_pattern = "outputs/edm_qm9/eval/chain_{}/chain_{:0>3d}.txt"
