@@ -28,8 +28,31 @@ from qcelemental.exceptions import ValidationError
 from openbabel import openbabel as ob
 import matgl
 from matgl.ext.ase import M3GNetCalculator
+import random
+from multiprocessing import Pool
 
-NUM_THREADS = 28
+NUM_THREADS = 24
+
+#query = torch.tensor([[ 0.1836,  1.4657,  0.2675],
+#        [-0.1137,  0.0701, -0.0703],
+#        [ 0.5879, -0.4521, -1.1837],
+#        [ 0.2378, -0.2818, -2.4923],
+#        [-0.8980,  0.4187, -3.1417],
+#        [ 1.1484, -0.9052, -3.2955],
+#        [ 2.0695, -1.4938, -2.4831],
+#        [ 1.7937, -1.2524, -1.1760],
+#        [ 2.5528, -1.7201,  0.0257],
+#        [ 1.2485,  1.6630,  0.4714],
+#        [-0.1217,  2.1137, -0.5589],
+#        [-0.3975,  1.7514,  1.1497],
+#        [ 0.0345, -0.5163,  0.7423],
+#        [-0.5980,  1.3621, -3.6154],
+#        [-1.3536, -0.2057, -3.9177],
+#        [-1.6542,  0.6415, -2.3845],
+#        [ 2.8507, -2.0453, -2.9810],
+#        [ 2.8760, -0.8818,  0.6544],
+#        [ 1.9490, -2.3817,  0.6596],
+#        [ 3.4466, -2.2782, -0.2663]])
 
 def do_ml_relaxations(model, args, xyz, symbols, charges, dataset_info, start_T):
     num_atoms = xyz.shape[0]
@@ -105,12 +128,12 @@ def get_relax_results(atom_symbols, xyz, method="psi4", basis="6-31G_2df_p_", no
     if norelax:
         return initial_e, initial_f, None, None, None, None, None
 
-    success, relaxed, relax_num_steps = relax(atoms, basis=basis, num_threads=NUM_THREADS)
+    success, relaxed, relax_num_steps = relax(atoms, method=method, basis=basis, num_threads=NUM_THREADS)
     if not success:
         return initial_e, initial_f, None, None, None, None, None
     relax_time = time.time() - start_time
     relaxed_xyz = relaxed.positions
-    relaxed_e, relaxed_f = get_ef(relaxed, method=method basis=basis, num_threads=NUM_THREADS)
+    relaxed_e, relaxed_f = get_ef(relaxed, method=method, basis=basis, num_threads=NUM_THREADS)
 
     return initial_e, initial_f, relaxed_xyz, relaxed_e, relaxed_f, relax_time, relax_num_steps
 
@@ -135,16 +158,17 @@ def xyz_to_rdkit(symbols, xyz):
 def main(model_path, epoch, start_T, dataset_name="qm9"):
     torch.manual_seed(4)
     np.random.seed(1)
+    random.seed(42)
 
     global_start_time = time.time()
 
     psi4.set_memory("32 GB")
 
     if dataset_name == "qm9":
-        method="psi4"
+        method = "psi4"
         basis = "6-31G_2df_p_"
     elif dataset_name == "geom":
-        method="xtb"
+        method = "xtb"
         basis = "6-31G"
         #basis = "cc-pVDZ"
 
@@ -226,8 +250,22 @@ def main(model_path, epoch, start_T, dataset_name="qm9"):
 
     #breakpoint()
     for data_idx, datum in enumerate(val_dataloader):
-        if data_idx > (50 if dataset_name == "geom" else 50):
+        if data_idx > (500 if dataset_name == "geom" else 50):
             break
+
+        """
+        cur = datum["positions"][0]
+        if cur.shape[0] != query.shape[0]:
+            continue
+        delta = (cur - query).norm(dim=1).mean()
+        if delta < 0.01:
+            print(delta)
+            print(datum["index"])
+            print([atom_decoder[a] for a in datum["one_hot"][0].float().argmax(dim=1)])
+
+        continue
+        """
+
         print("[{}] Starting data_idx {}".format(time.time() - global_start_time, data_idx))
 
         # structures we care about for each input:
@@ -270,20 +308,40 @@ def main(model_path, epoch, start_T, dataset_name="qm9"):
 
         # this works for more complex molecules
         mol = xyz_to_rdkit(atom_symbols, initial_xyz)
+        failed = False
         try:
             Chem.SanitizeMol(mol)
         except:
             print("WARNING: Chem.SanitizeMol errored")
-            continue
+            failed = True
 
-        success = AllChem.EmbedMolecule(mol)
-        if success == -1:
-            print("WARNING: Could not embed molecule")
+        if not failed:
+            success = AllChem.EmbedMolecule(mol, randomSeed=42)
+            if success == -1:
+                print("WARNING: Could not embed molecule")
+                failed = True
+
+        if failed:
+            guess_xyzs.append(None), guess_es.append(None), guess_fs.append(None)
+            guess_relaxed_xyzs.append(None), guess_relaxed_es.append(None)
+            guess_relaxed_fs.append(None), guess_relax_times.append(None)
+            guess_nsteps.append(None)
+
+            mmff_xyzs.append(None), mmff_es.append(None), mmff_fs.append(None)
+            mmff_relaxed_xyzs.append(None), mmff_relaxed_es.append(None)
+            mmff_relaxed_fs.append(None), mmff_relax_times.append(None)
+            mmff_nsteps.append(None)
+
+            diffused_xyzs.append(None), diffused_es.append(None), diffused_fs.append(None)
+            diffused_relaxed_xyzs.append(None), diffused_relaxed_es.append(None)
+            diffused_relaxed_fs.append(None), diffused_relax_times.append(None)
+            diffused_nsteps.append(None)
+
             continue
 
         guess_xyz = mol.GetConformer().GetPositions()
         guess_e, guess_f, guess_relaxed_xyz, guess_relaxed_e, guess_relaxed_f, guess_relax_time, guess_nstep = \
-                get_relax_results(atom_symbols, guess_xyz, method=method, basis=basis, norelax=False)
+                get_relax_results(atom_symbols, guess_xyz, method=method, basis=basis, norelax=True)
 
         guess_xyzs.append(guess_xyz)
         guess_es.append(guess_e)
@@ -300,7 +358,7 @@ def main(model_path, epoch, start_T, dataset_name="qm9"):
         # get the DFT-computed energy of the MMFF-optimized structure
         mmff_xyz = mol.GetConformer().GetPositions()
         mmff_e, mmff_f, mmff_relaxed_xyz, mmff_relaxed_e, mmff_relaxed_f, mmff_relax_time, mmff_nstep = \
-                get_relax_results(atom_symbols, mmff_xyz, method=method, basis=basis, norelax=False)
+                get_relax_results(atom_symbols, mmff_xyz, method=method, basis=basis, norelax=epoch != "0")
 
         mmff_xyzs.append(mmff_xyz)
         mmff_es.append(mmff_e)
@@ -409,7 +467,7 @@ def main(model_path, epoch, start_T, dataset_name="qm9"):
         "chain_es": chain_es,
         "chain_fs": chain_fs
     }
-    with open("denoising_results_{}{}_sT{}.pkl".format(dataset_name, epoch, start_T), "wb") as f:
+    with open("denoising_results/denoising_results_{}{}_sT{}.pkl".format(dataset_name, epoch, start_T), "wb") as f:
         pickle.dump(results, f)
 
 
@@ -484,9 +542,14 @@ if __name__ == "__main__":
     start_T = int(sys.argv[2])
     if dataset_name == "qm9":
         model_path = "outputs/edm_qm9/"
-        epoch = 5150
+        #epoch = 5150
         # epoch = 3250
+        epoch = int(sys.argv[3])
+        #epochs = [0, 250, 500, 750, 950, 1450, 2000, 2500, 3250, 5150]
+        main(model_path, str(epoch), start_T, "qm9")
     elif dataset_name == "geom":
         model_path = "outputs/edm_geom_drugs_resume"
-        epoch = "0"
-    main(model_path, epoch, start_T, dataset_name=dataset_name)
+        epoch = "84"
+        for epoch in range(190, 251, 10):
+            main(model_path, str(epoch), start_T, dataset_name=dataset_name)
+    print()
