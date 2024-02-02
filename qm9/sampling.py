@@ -79,8 +79,8 @@ def sample_chain(args, device, flow, n_tries, dataset_info, prop_dist=None):
             chain = flow.sample_chain(n_samples, n_nodes, node_mask, edge_mask, context, keep_frames=1000)
             chain = reverse_tensor(chain)
 
-            # Repeat last frame to see final sample better.
-            chain = torch.cat([chain, chain[-1:].repeat(10, 1, 1)], dim=0)
+            ## Repeat last frame to see final sample better.
+            #chain = torch.cat([chain, chain[-1:].repeat(10, 1, 1)], dim=0)
             x = chain[-1:, :, 0:3]
             one_hot = chain[-1:, :, 3:-1]
             one_hot = torch.argmax(one_hot, dim=2)
@@ -92,8 +92,10 @@ def sample_chain(args, device, flow, n_tries, dataset_info, prop_dist=None):
             # Prepare entire chain.
             x = chain[:, :, 0:3]
             one_hot = chain[:, :, 3:-1]
-            one_hot = F.one_hot(torch.argmax(one_hot, dim=2), num_classes=len(dataset_info['atom_decoder']))
-            charges = torch.round(chain[:, :, -1:]).long()
+
+            #one_hot = F.one_hot(torch.argmax(one_hot, dim=2), num_classes=len(dataset_info['atom_decoder']))
+            #charges = torch.round(chain[:, :, -1:]).long()
+            charges = chain[:,:,-1:]
 
             if mol_stable:
                 print('Found stable molecule to visualize :)')
