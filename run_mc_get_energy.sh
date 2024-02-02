@@ -27,7 +27,7 @@ process_file() {
 export -f process_file
 
 # Process the files using xargs to control parallelism
-ls $dir/step_*.xyz | xargs -P 32 -I{} bash -c "process_file {} $temp_dir"
+ls $dir/step_*.xyz | xargs -P 48 -I{} bash -c "process_file {} $temp_dir"
 
 # Concatenate and sort the output files
 for filename in $(ls $temp_dir/step_*.xyz | xargs -n 1 basename | sort -V); do
