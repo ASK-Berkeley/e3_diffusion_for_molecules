@@ -17,6 +17,8 @@ def xyz_to_mol(xyz_fn):
 
 def get_psi4_calc(atoms, num_threads=1):
     # qm9 functional/basis
+    #return Psi4(atoms=atoms, method="B3LYP", basis="6-31G",
+    #            memory="16GB", num_threads=num_threads)
     return Psi4(atoms=atoms, method="B3LYP", basis="6-31G_2df_p_",
                 memory="16GB", num_threads=num_threads)
     # faster/less accurate
