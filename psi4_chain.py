@@ -11,7 +11,7 @@ from ase.calculators.psi4 import Psi4
 from ase.calculators.calculator import CalculationFailed
 from xtb.ase.calculator import XTB
 from ase.build import molecule
-from psi4.driver.p4util.exceptions import OptimizationConvergenceError
+from psi4.driver.p4util.exceptions import OptimizationConvergenceError, SCFConvergenceError
 from qcelemental.exceptions import ValidationError
 
 def xyz_to_mol(xyz_fn):
@@ -50,7 +50,7 @@ def get_ef(atoms, method="psi4", basis="6-31G_2df_p_", num_threads=1):
     atoms.calc = calc
     try:
         return atoms.get_potential_energy(), atoms.get_forces()
-    except CalculationFailed as err:
+    except (CalculationFailed, SCFConvergenceError) as err:
         print("WARNING: Calculation Failed on atoms:")
         ase.io.write("-", atoms, format="xyz")
         return np.nan, np.nan * np.ones_like(atoms.get_positions())
