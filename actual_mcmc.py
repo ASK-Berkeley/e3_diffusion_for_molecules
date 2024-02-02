@@ -84,11 +84,11 @@ def rdkit_to_ase(rdkit_mol):
 def get_energy(mol):
     #return AllChem.UFFGetMoleculeForceField(mol).CalcEnergy()
 
-    ff = AllChem.MMFFGetMoleculeForceField(mol, AllChem.MMFFGetMoleculeProperties(mol))
+    #ff = AllChem.MMFFGetMoleculeForceField(mol, AllChem.MMFFGetMoleculeProperties(mol))
     # Get the energy of the current state
-    return ff.CalcEnergy()
+    #return ff.CalcEnergy()
 
-    e, f = get_ef(rdkit_to_ase(mol), num_threads=32)
+    e, f = get_ef(rdkit_to_ase(mol), num_threads=6)
     return e
 
 def get_rotatable_bonds(mol):
