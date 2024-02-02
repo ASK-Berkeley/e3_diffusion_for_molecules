@@ -130,7 +130,7 @@ def main():
     device_id = -1
     rank = -1
     if args.dp and torch.cuda.device_count() > 1 and args.cuda:
-        torch.distributed.init_process_group("nccl")
+        torch.distributed.init_process_group("gloo")
         rank = torch.distributed.get_rank()
         print("rank =", rank)
         if rank == 0:
@@ -139,7 +139,10 @@ def main():
         torch.cuda.set_device(rank)
         torch.cuda.empty_cache()
 
-    device = torch.device("cuda:{}".format(device_id) if args.cuda else "cpu")
+    if rank == -1:
+        device = torch.device("cuda:0" if args.cuda else "cpu")
+    else:
+        device = torch.device("cuda:{}".format(device_id) if args.cuda else "cpu")
     print("rank = ", rank, "; device =", device)
     dtype = torch.float32
 
