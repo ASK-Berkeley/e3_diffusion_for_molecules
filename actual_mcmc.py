@@ -10,13 +10,13 @@ from ase import Atoms
 from ase.visualize import view
 import os
 import time
-import diptest
 
 np.set_printoptions(linewidth=180)
 
 # Load the molecule
 
 def main():
+    import diptest
     #0074  0403  0550  0622  0777  ->0832  1050  1259  1289  1408
     mol_id = "0403"
     gs_fn = "outputs/qm9_mc/flexible_mols/diffusion/T01/{}/gs.xyz".format(mol_id)
