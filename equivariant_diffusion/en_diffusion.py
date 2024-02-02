@@ -770,11 +770,17 @@ class EnVariationalDiffusion(torch.nn.Module):
             start_T = self.T
         if isinstance(fix_noise, dict):
             x = fix_noise["x"]
-            h = {"categorical": fix_noise["h_categorical"],
-                 "integer": fix_noise["h_integer"]}
+            h = {"categorical": fix_noise["h_categorical"]}
+            if "h_integer" in fix_noise:
+                h["integer"] = fix_noise["h_integer"]
+            else:
+                h["integer"] = torch.zeros((n_samples, n_nodes, 1), dtype=float)
             x_normed, h_normed, _ = self.normalize(x, h, node_mask)
             #print(x_normed.shape, h_normed["categorical"].shape, h_normed["integer"].shape)
-            z = torch.cat([x_normed, h_normed["categorical"], h_normed["integer"]], dim=2)
+            if "h_integer" in fix_noise:
+                z = torch.cat([x_normed, h_normed["categorical"], h_normed["integer"]], dim=2)
+            else:
+                z = torch.cat([x_normed, h_normed["categorical"]], dim=2)
             fix_noise = True
         else:
             if fix_noise:
