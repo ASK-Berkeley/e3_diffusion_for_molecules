@@ -13,6 +13,9 @@ import numpy as np
 import scipy.stats as sp_stats
 from qm9 import bond_analyze
 
+from ase import Atoms
+from psi4_chain import get_ef
+
 
 # 'atom_decoder': ['H', 'B', 'C', 'N', 'O', 'F', 'Al', 'Si', 'P', 'S', 'Cl', 'As', 'Br', 'I', 'Hg', 'Bi'],
 
@@ -333,6 +336,7 @@ def analyze_stability_for_molecules(molecule_list, dataset_info):
     n_samples = len(x)
 
     molecule_stable = 0
+    total_energy = 0
     nr_stable_bonds = 0
     n_atoms = 0
 
@@ -348,6 +352,13 @@ def analyze_stability_for_molecules(molecule_list, dataset_info):
 
     for mol in processed_list:
         pos, atom_type = mol
+
+        symbols = [dataset_info["atom_decoder"][a] for a in atom_type]
+        energy, _ = get_ef(Atoms(symbols=symbols, positions=pos), method="xtb")
+        if np.isnan(energy):
+            energy = 0
+        total_energy += energy
+
         validity_results = check_stability(pos, atom_type, dataset_info)
 
         molecule_stable += int(validity_results[0])
@@ -355,9 +366,11 @@ def analyze_stability_for_molecules(molecule_list, dataset_info):
         n_atoms += int(validity_results[2])
 
     # Validity
+    avg_energy = total_energy / float(n_samples)
     fraction_mol_stable = molecule_stable / float(n_samples)
     fraction_atm_stable = nr_stable_bonds / float(n_atoms)
     validity_dict = {
+        "avg_energy": avg_energy,
         'mol_stable': fraction_mol_stable,
         'atm_stable': fraction_atm_stable,
     }

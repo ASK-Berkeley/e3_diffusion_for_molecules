@@ -192,12 +192,12 @@ def collate_fn(batch):
 
 class GeomDrugsDataLoader(DataLoader):
     def __init__(self, sequential, dataset, batch_size, shuffle, drop_last=False):
-        sampler = DistributedSampler(dataset, shuffle=shuffle, drop_last=drop_last)
         if sequential:
             # This goes over the data sequentially, advantage is that it takes
             # less memory for smaller molecules, but disadvantage is that the
             # model sees very specific orders of data.
             assert not shuffle
+            sampler = SequentialSampler(dataset)
             batch_sampler = CustomBatchSampler(sampler, batch_size, drop_last,
                                                dataset.split_indices)
             super().__init__(dataset, batch_sampler=batch_sampler)
@@ -205,13 +205,18 @@ class GeomDrugsDataLoader(DataLoader):
         else:
             # Dataloader goes through data randomly and pads the molecules to
             # the largest molecule size.
-            super().__init__(dataset, batch_size, collate_fn=collate_fn,
-                             drop_last=drop_last, sampler=sampler)
+            if torch.distributed.is_initialized():
+                sampler = DistributedSampler(dataset, shuffle=shuffle, drop_last=drop_last)
+                super().__init__(dataset, batch_size, collate_fn=collate_fn,
+                                 drop_last=drop_last, sampler=sampler)
+            else:
+                super().__init__(dataset, batch_size, shuffle=shuffle,
+                                 collate_fn=collate_fn, drop_last=drop_last)
 
 
 class GeomDrugsTransform(object):
     def __init__(self, dataset_info, include_charges, device, sequential):
-        self.atomic_number_list = torch.Tensor(dataset_info['atomic_nb'])[None, :]
+        self.atomic_number_list = dataset_info['atomic_nb']
         self.device = device
         self.include_charges = include_charges
         self.sequential = sequential
@@ -221,7 +226,7 @@ class GeomDrugsTransform(object):
         new_data = {}
         new_data['positions'] = torch.from_numpy(data[:, -3:])
         atom_types = torch.from_numpy(data[:, 0].astype(int)[:, None])
-        one_hot = atom_types == self.atomic_number_list
+        one_hot = atom_types == torch.tensor(self.atomic_number_list)[None,:]
         new_data['one_hot'] = one_hot
         if self.include_charges:
             new_data['charges'] = torch.zeros(n, 1, device=self.device)

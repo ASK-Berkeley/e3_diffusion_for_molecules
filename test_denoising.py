@@ -6,6 +6,7 @@ import sys
 import time
 import pickle
 import torch
+import torch.nn.functional as F
 from torch.utils.data import DataLoader
 import numpy as np
 from argparse import Namespace
@@ -19,27 +20,120 @@ from qm9 import dataset
 from configs.datasets_config import get_dataset_info
 import ase
 from ase.visualize import view
+from ase.optimize import BFGS
 from ase import Atoms
 import psi4
 from psi4_chain import get_ef, relax
 from qcelemental.exceptions import ValidationError
 from openbabel import openbabel as ob
+import matgl
+from matgl.ext.ase import M3GNetCalculator
+import random
+from multiprocessing import Pool
 
-NUM_THREADS = 32
+NUM_THREADS = 24
 
-def get_relax_results(atom_symbols, xyz, basis="6-31G_2df_p_", norelax=False):
+#query = torch.tensor([[ 0.1836,  1.4657,  0.2675],
+#        [-0.1137,  0.0701, -0.0703],
+#        [ 0.5879, -0.4521, -1.1837],
+#        [ 0.2378, -0.2818, -2.4923],
+#        [-0.8980,  0.4187, -3.1417],
+#        [ 1.1484, -0.9052, -3.2955],
+#        [ 2.0695, -1.4938, -2.4831],
+#        [ 1.7937, -1.2524, -1.1760],
+#        [ 2.5528, -1.7201,  0.0257],
+#        [ 1.2485,  1.6630,  0.4714],
+#        [-0.1217,  2.1137, -0.5589],
+#        [-0.3975,  1.7514,  1.1497],
+#        [ 0.0345, -0.5163,  0.7423],
+#        [-0.5980,  1.3621, -3.6154],
+#        [-1.3536, -0.2057, -3.9177],
+#        [-1.6542,  0.6415, -2.3845],
+#        [ 2.8507, -2.0453, -2.9810],
+#        [ 2.8760, -0.8818,  0.6544],
+#        [ 1.9490, -2.3817,  0.6596],
+#        [ 3.4466, -2.2782, -0.2663]])
+
+def do_ml_relaxations(model, args, xyz, symbols, charges, dataset_info, start_T):
+    num_atoms = xyz.shape[0]
+    atom_idx = torch.tensor([dataset_info["atom_encoder"][s] for s in symbols])
+    one_hot = F.one_hot(atom_idx, len(dataset_info["atom_decoder"])).type(torch.float32)
+
+    if dataset_info["name"] == "qm9":
+        idx_to_num = [1, 6, 7, 8, 9]
+    elif dataset_info["name"] == "geom":
+        idx_to_num = dataset_info["atomic_nb"]
+    atomic_nums = torch.tensor(idx_to_num)[atom_idx]
+
+    # reject structures with nonzero charge
+    if args.include_charges:
+        assert (charges.view(-1) - atomic_nums).abs().sum() == 0
+
+    # add padding & put in one-element batch
+    max_n_nodes = dataset_info["max_n_nodes"]
+    xyz_padded = F.pad(xyz, (0, 0, 0, max_n_nodes - num_atoms))[None,:,:].type(torch.float32)
+    one_hot_padded = F.pad(one_hot, (0, 0, 0, max_n_nodes - num_atoms))[None,:,:]
+    charges_padded = F.pad(charges, (0, 0, 0, max_n_nodes - num_atoms))[None,:,:]
+
+    # run diffused on the input positions
+    fix_noise = {"x": xyz_padded.cuda(),
+                 "h_categorical": one_hot_padded.cuda()}
+    if args.include_charges:
+         fix_noise["h_integer"] = charges_padded.type(torch.float32).cuda()
+
+    diffused_one_hot, diffused_charges, diffused_xyz, diffused_node_mask, chain = \
+        sample(args, args.device, model, dataset_info,
+               nodesxsample=torch.tensor([num_atoms]), fix_noise=fix_noise, start_T=start_T)
+
+    chain = torch.flip(chain, dims=[0])
+
+    # returned as a batch with padding. Get first out of batch & remove padding
+    mask = diffused_node_mask[:,:,0] == 1
+    diffused_one_hot = diffused_one_hot[mask].cpu()
+    diffused_charges = diffused_charges[mask].view(-1).cpu()
+    diffused_xyz = diffused_xyz[mask].cpu()
+
+    mask = mask.cpu().view(-1)
+    chain = chain[:,mask,:]
+
+    return diffused_xyz, chain
+
+    # make sure diffused didn't add charge to any of the atoms or change atom type
+    if (diffused_one_hot.argmax(dim=1) - atom_idx).abs().sum() != 0:
+        print("WARNING: Diffusion changed atomic nums. Ignoring new nums.")
+    if args.include_charges:
+        if (diffused_charges - atomic_nums).abs().sum() != 0:
+            print("WARNING: Diffusion changed charges. Ignoring new charges.")
+
+    pot = matgl.load_model("M3GNet-MP-2021.2.8-PES")
+    calc = M3GNetCalculator(pot)
+    atoms = Atoms(symbols=symbols, positions=xyz)
+    atoms.set_cell(np.eye(3) * 100)
+    atoms.calc = calc
+    traj_fn = "tmp{}.traj".format(np.random.randint(1000))
+    opt = BFGS(atoms, trajectory="test3.traj")
+    opt.run(fmax=0.03)
+    m3g_xyz = atoms.positions
+
+    m3g_traj = ase.io.Trajectory(traj_fn)
+    os.remove(traj_fn)
+
+    return diffused_xyz, chain, m3g_xyz, m3g_traj
+
+
+def get_relax_results(atom_symbols, xyz, method="psi4", basis="6-31G_2df_p_", norelax=False):
     atoms = Atoms(symbols=atom_symbols, positions=xyz)
-    initial_e, initial_f = get_ef(atoms, basis=basis, num_threads=NUM_THREADS)
+    initial_e, initial_f = get_ef(atoms, method=method, basis=basis, num_threads=NUM_THREADS)
     start_time = time.time()
     if norelax:
         return initial_e, initial_f, None, None, None, None, None
 
-    success, relaxed, relax_num_steps = relax(atoms, basis=basis, num_threads=NUM_THREADS)
+    success, relaxed, relax_num_steps = relax(atoms, method=method, basis=basis, num_threads=NUM_THREADS)
     if not success:
         return initial_e, initial_f, None, None, None, None, None
     relax_time = time.time() - start_time
     relaxed_xyz = relaxed.positions
-    relaxed_e, relaxed_f = get_ef(relaxed, basis=basis, num_threads=NUM_THREADS)
+    relaxed_e, relaxed_f = get_ef(relaxed, method=method, basis=basis, num_threads=NUM_THREADS)
 
     return initial_e, initial_f, relaxed_xyz, relaxed_e, relaxed_f, relax_time, relax_num_steps
 
@@ -64,14 +158,17 @@ def xyz_to_rdkit(symbols, xyz):
 def main(model_path, epoch, start_T, dataset_name="qm9"):
     torch.manual_seed(4)
     np.random.seed(1)
+    random.seed(42)
 
     global_start_time = time.time()
 
     psi4.set_memory("32 GB")
 
     if dataset_name == "qm9":
+        method = "psi4"
         basis = "6-31G_2df_p_"
     elif dataset_name == "geom":
+        method = "xtb"
         basis = "6-31G"
         #basis = "cc-pVDZ"
 
@@ -105,6 +202,7 @@ def main(model_path, epoch, start_T, dataset_name="qm9"):
     dataloaders, charge_scale = retrieve_dataloaders(args)
     #first_datum = next(iter(dataloaders["valid"]))
 
+    all_symbols = []
     initial_xyzs = []
     initial_es = []
     initial_fs = []
@@ -138,6 +236,7 @@ def main(model_path, epoch, start_T, dataset_name="qm9"):
     diffused_relax_times = []
     diffused_nsteps = []
 
+    chain_xyzs = []
     chain_es = []
     chain_fs = []
 
@@ -151,8 +250,22 @@ def main(model_path, epoch, start_T, dataset_name="qm9"):
 
     #breakpoint()
     for data_idx, datum in enumerate(val_dataloader):
-        if data_idx > (50 if dataset_name == "geom" else 50):
+        if data_idx > (500 if dataset_name == "geom" else 50):
             break
+
+        """
+        cur = datum["positions"][0]
+        if cur.shape[0] != query.shape[0]:
+            continue
+        delta = (cur - query).norm(dim=1).mean()
+        if delta < 0.01:
+            print(delta)
+            print(datum["index"])
+            print([atom_decoder[a] for a in datum["one_hot"][0].float().argmax(dim=1)])
+
+        continue
+        """
+
         print("[{}] Starting data_idx {}".format(time.time() - global_start_time, data_idx))
 
         # structures we care about for each input:
@@ -170,11 +283,12 @@ def main(model_path, epoch, start_T, dataset_name="qm9"):
         initial_xyz = datum["positions"][0] # (datum is actually a batch of size 1)
         one_hot = datum["one_hot"][0]
         atom_types = one_hot.float().argmax(dim=1)
+
         atom_symbols = [atom_decoder[a] for a in atom_types]
-        print(atom_symbols)
+        all_symbols.append(atom_symbols)
 
         initial_e, initial_f, initial_relaxed_xyz, initial_relaxed_e, initial_relaxed_f, initial_relax_time, initial_nstep = \
-                get_relax_results(atom_symbols, initial_xyz, basis=basis)
+                get_relax_results(atom_symbols, initial_xyz, method=method, basis=basis, norelax=False)
 
         initial_xyzs.append(initial_xyz)
         initial_es.append(initial_e)
@@ -194,20 +308,40 @@ def main(model_path, epoch, start_T, dataset_name="qm9"):
 
         # this works for more complex molecules
         mol = xyz_to_rdkit(atom_symbols, initial_xyz)
+        failed = False
         try:
             Chem.SanitizeMol(mol)
         except:
             print("WARNING: Chem.SanitizeMol errored")
-            continue
+            failed = True
 
-        #success = AllChem.EmbedMolecule(mol)
-        #if success == -1:
-        #    print("WARNING: Could not embed molecule")
-        #    continue
+        if not failed:
+            success = AllChem.EmbedMolecule(mol, randomSeed=42)
+            if success == -1:
+                print("WARNING: Could not embed molecule")
+                failed = True
+
+        if failed:
+            guess_xyzs.append(None), guess_es.append(None), guess_fs.append(None)
+            guess_relaxed_xyzs.append(None), guess_relaxed_es.append(None)
+            guess_relaxed_fs.append(None), guess_relax_times.append(None)
+            guess_nsteps.append(None)
+
+            mmff_xyzs.append(None), mmff_es.append(None), mmff_fs.append(None)
+            mmff_relaxed_xyzs.append(None), mmff_relaxed_es.append(None)
+            mmff_relaxed_fs.append(None), mmff_relax_times.append(None)
+            mmff_nsteps.append(None)
+
+            diffused_xyzs.append(None), diffused_es.append(None), diffused_fs.append(None)
+            diffused_relaxed_xyzs.append(None), diffused_relaxed_es.append(None)
+            diffused_relaxed_fs.append(None), diffused_relax_times.append(None)
+            diffused_nsteps.append(None)
+
+            continue
 
         guess_xyz = mol.GetConformer().GetPositions()
         guess_e, guess_f, guess_relaxed_xyz, guess_relaxed_e, guess_relaxed_f, guess_relax_time, guess_nstep = \
-                get_relax_results(atom_symbols, guess_xyz, basis=basis, norelax=True)
+                get_relax_results(atom_symbols, guess_xyz, method=method, basis=basis, norelax=True)
 
         guess_xyzs.append(guess_xyz)
         guess_es.append(guess_e)
@@ -224,7 +358,7 @@ def main(model_path, epoch, start_T, dataset_name="qm9"):
         # get the DFT-computed energy of the MMFF-optimized structure
         mmff_xyz = mol.GetConformer().GetPositions()
         mmff_e, mmff_f, mmff_relaxed_xyz, mmff_relaxed_e, mmff_relaxed_f, mmff_relax_time, mmff_nstep = \
-                get_relax_results(atom_symbols, mmff_xyz, basis=basis)
+                get_relax_results(atom_symbols, mmff_xyz, method=method, basis=basis, norelax=epoch != "0")
 
         mmff_xyzs.append(mmff_xyz)
         mmff_es.append(mmff_e)
@@ -243,36 +377,11 @@ def main(model_path, epoch, start_T, dataset_name="qm9"):
         charges = [mol.GetAtoms()[i].GetAtomicNum() for i in range(num_atoms)]
         charges = torch.tensor(charges).view(-1, 1)
 
-
-        # add padding
-        max_n_nodes = dataset_info["max_n_nodes"]
-        mmff_pos_padded = torch.zeros((1, max_n_nodes, mmff_xyz.shape[1]), dtype=torch.float32)
-        mmff_pos_padded[:,:num_atoms,:] = mmff_xyz
-        one_hot_padded = torch.zeros((1, max_n_nodes, one_hot.shape[1]), dtype=torch.float32)
-        one_hot_padded[:,:num_atoms,:] = one_hot
-        charges_padded = torch.zeros((1, max_n_nodes, charges.shape[1]), dtype=torch.float32)
-        charges_padded[:,:num_atoms,:] = charges
-
-        # run diffused on the MMFF-optimized positions
-        fix_noise = {"x": mmff_pos_padded.cuda(),
-                     "h_categorical": one_hot_padded.cuda()}
-        if args.include_charges:
-             fix_noise["h_integer"] = charges_padded.cuda()
-
-        #breakpoint()
-        diffused_one_hot, diffused_charges, diffused_xyz, diffused_node_mask, chain = \
-            sample(args, args.device, model, dataset_info,
-                   nodesxsample=torch.tensor([num_atoms]), fix_noise=fix_noise, start_T=start_T)
-
-        chain = torch.flip(chain, dims=[0])
-
-        # returned as a batch with padding. Get first out of batch & remove padding
-        diffused_one_hot = diffused_one_hot[diffused_node_mask[:,:,0] == 1].cpu()
-        diffused_charges = diffused_charges[diffused_node_mask[:,:,0] == 1].view(-1).cpu()
-        diffused_xyz = diffused_xyz[diffused_node_mask[:,:,0] == 1].cpu()
+        diffused_xyz, chain = do_ml_relaxations(model, args, mmff_xyz, atom_symbols,
+                                                charges, dataset_info, start_T)
 
         diffused_e, diffused_f, diffused_relaxed_xyz, diffused_relaxed_e, diffused_relaxed_f, diffused_relax_time, diffused_nstep = \
-                get_relax_results(atom_symbols, diffused_xyz, basis=basis)
+                get_relax_results(atom_symbols, diffused_xyz, method=method, basis=basis)
 
         diffused_xyzs.append(diffused_xyz)
         diffused_es.append(diffused_e)
@@ -283,30 +392,33 @@ def main(model_path, epoch, start_T, dataset_name="qm9"):
         diffused_relax_times.append(diffused_relax_time)
         diffused_nsteps.append(diffused_nstep)
 
-        # make sure diffused didn't add charge to any of the atoms
-        if args.include_charges:
-            atomic_nums = [dataset_info["atomic_nb"][a] for a in diffused_one_hot.argmax(dim=1)]
-            assert (diffused_charges - torch.tensor(atomic_nums)).abs().sum() == 0
+        if dataset_info["name"] == "qm9":
+            idx_to_num = [1, 6, 7, 8, 9]
+        elif dataset_info["name"] == "geom":
+            idx_to_num = dataset_info["atomic_nb"]
 
         # compute DFT energies for each structure along the diffused path
         n_species = len(dataset_info["atom_decoder"])
-        numbers = [[dataset_info["atomic_nb"][a]
+        numbers = [[idx_to_num[a]
                     for a in chain[i,:,3:3+n_species].float().argmax(dim=1)]
                    for i in range(chain.shape[0])]
         numbers = torch.tensor(numbers).cpu()
-        mask = diffused_node_mask[:,:,0].cpu().view(-1) == 1
         es = []
         fs = []
+        xyzs = []
         print("Computing chain ef...")
         for i in range(0, numbers.shape[0]):
             print("{} / {}".format(i, numbers.shape[0] - 1), end="\r")
-            e, f = get_ef(Atoms(numbers=numbers[i,mask],
-                                positions=chain[i,mask,:3].cpu()),
+            xyz = chain[i,:,:3].cpu()
+            e, f = get_ef(Atoms(numbers=numbers[i,:], positions=xyz),
+                          method=method,
                           basis=basis,
                           num_threads=NUM_THREADS)
+            xyzs.append(xyz)
             es.append(e - initial_relaxed_e)
             fs.append(f)
         print()
+        chain_xyzs.append(xyzs)
         chain_es.append(es)
         chain_fs.append(fs)
 
@@ -318,6 +430,7 @@ def main(model_path, epoch, start_T, dataset_name="qm9"):
         print("********************")
 
     results = {
+        "all_symbols": all_symbols,
         "initial_xyzs": initial_xyzs,
         "initial_es": initial_es,
         "initial_fs": initial_fs,
@@ -350,10 +463,11 @@ def main(model_path, epoch, start_T, dataset_name="qm9"):
         "diffused_relaxed_fs": diffused_relaxed_fs,
         "diffused_relax_times": diffused_relax_times,
         "diffused_nsteps": diffused_nsteps,
+        "chain_xyzs": chain_xyzs,
         "chain_es": chain_es,
         "chain_fs": chain_fs
     }
-    with open("denoising_results_noguess_xtb_{}_sT{}.pkl".format(dataset_name, start_T), "wb") as f:
+    with open("denoising_results/denoising_results_{}{}_sT{}.pkl".format(dataset_name, epoch, start_T), "wb") as f:
         pickle.dump(results, f)
 
 
@@ -428,9 +542,14 @@ if __name__ == "__main__":
     start_T = int(sys.argv[2])
     if dataset_name == "qm9":
         model_path = "outputs/edm_qm9/"
-        epoch = 5150
+        #epoch = 5150
         # epoch = 3250
+        epoch = int(sys.argv[3])
+        #epochs = [0, 250, 500, 750, 950, 1450, 2000, 2500, 3250, 5150]
+        main(model_path, str(epoch), start_T, "qm9")
     elif dataset_name == "geom":
-        model_path = "outputs_original/edm_geom_drugs"
-        epoch = "pretrained"
-    main(model_path, epoch, start_T, dataset_name=dataset_name)
+        model_path = "outputs/edm_geom_drugs_resume"
+        epoch = "84"
+        for epoch in range(190, 251, 10):
+            main(model_path, str(epoch), start_T, dataset_name=dataset_name)
+    print()

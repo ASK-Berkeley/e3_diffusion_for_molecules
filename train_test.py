@@ -104,12 +104,14 @@ def check_mask_correct(variables, node_mask):
 def test(args, loader, epoch, eval_model, device, dtype, property_norms, nodes_dist, partition='Test'):
     eval_model.eval()
     with torch.no_grad():
-        nll_epoch = 0
-        n_samples = 0
+        nll_epoch = torch.tensor([0], dtype=float, device=device)
+        n_samples = torch.tensor([0], dtype=float, device=device)
 
         n_iterations = len(loader)
 
         for i, data in enumerate(loader):
+            if i > 1000:
+                break
             x = data['positions'].to(device, dtype)
             batch_size = x.size(0)
             node_mask = data['atom_mask'].to(device, dtype).unsqueeze(2)
@@ -145,9 +147,11 @@ def test(args, loader, epoch, eval_model, device, dtype, property_norms, nodes_d
             n_samples += batch_size
             if i % args.n_report_steps == 0:
                 print(f"\r {partition} NLL \t epoch: {epoch}, iter: {i}/{n_iterations}, "
-                      f"NLL: {nll_epoch/n_samples:.2f}")
+                      f"NLL: {nll_epoch.item()/n_samples.item():.2f}")
 
-    return nll_epoch/n_samples
+    torch.distributed.reduce(nll_epoch, 0)
+    torch.distributed.reduce(n_samples, 0)
+    return (nll_epoch/n_samples).item()
 
 
 def save_and_sample_chain(model, args, device, dataset_info, prop_dist,

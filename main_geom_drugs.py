@@ -3,6 +3,8 @@ try:
     from rdkit import Chem
 except ModuleNotFoundError:
     pass
+
+import multiprocessing
 import build_geom_dataset
 from configs.datasets_config import geom_with_h
 import copy
@@ -128,14 +130,19 @@ def main():
     device_id = -1
     rank = -1
     if args.dp and torch.cuda.device_count() > 1 and args.cuda:
-        torch.distributed.init_process_group("nccl")
+        torch.distributed.init_process_group("gloo")
         rank = torch.distributed.get_rank()
         print("rank =", rank)
         if rank == 0:
             print(f'Training using {torch.cuda.device_count()} GPUs')
         device_id = rank % torch.cuda.device_count()
+        torch.cuda.set_device(rank)
+        torch.cuda.empty_cache()
 
-    device = torch.device("cuda:{}".format(device_id) if args.cuda else "cpu")
+    if rank == -1:
+        device = torch.device("cuda:0" if args.cuda else "cpu")
+    else:
+        device = torch.device("cuda:{}".format(device_id) if args.cuda else "cpu")
     print("rank = ", rank, "; device =", device)
     dtype = torch.float32
 
@@ -170,7 +177,7 @@ def main():
         resume = args.resume
         wandb_usr = args.wandb_usr
 
-        with open(join(args.resume, 'args.pickle'), 'rb') as f:
+        with open(join(args.resume, 'args_pretrained.pickle'), 'rb') as f:
             args = pickle.load(f)
         args.resume = resume
         args.break_train_epoch = False
@@ -210,6 +217,8 @@ def main():
     args.context_node_nf = context_node_nf
 
 
+    torch.cuda.set_device(device)
+    torch.cuda.empty_cache()
     # Create EGNN flow
     model, nodes_dist, prop_dist = get_model(args, device, dataset_info, dataloader_train=dataloaders['train'])
     model = model.to(device)
@@ -220,16 +229,26 @@ def main():
     gradnorm_queue.add(3000)  # Add large value that will be flushed.
 
     if args.resume is not None:
+        ema_fn = "generative_model_ema_pretrained.npy"
+        non_ema_fn = "generative_model_pretrained.npy"
+        model_fn = ema_fn if args.ema_decay > 0 else non_ema_fn
+        model_fn = join(args.resume, model_fn)
+        state_dict = torch.load(model_fn, map_location=device)
+        model.load_state_dict(state_dict)
+
+
+        """
         flow_state_dict = torch.load(join(args.resume, 'flow.npy'))
         dequantizer_state_dict = torch.load(join(args.resume, 'dequantizer.npy'))
         optim_state_dict = torch.load(join(args.resume, 'optim.npy'))
         model.load_state_dict(flow_state_dict)
         optim.load_state_dict(optim_state_dict)
+        """
 
     # Initialize dataparallel if enabled and possible.
     if args.dp and torch.cuda.device_count() > 1 and args.cuda:
         print(f'Training using {torch.cuda.device_count()} GPUs')
-        model_dp = DDP(model.to(device), device_ids=[device_id])
+        model_dp = DDP(model, device_ids=[device_id])
     else:
         model_dp = model
 
@@ -239,7 +258,7 @@ def main():
         ema = diffusion_utils.EMA(args.ema_decay)
 
         if args.dp and torch.cuda.device_count() > 1:
-            model_ema_dp = DDP(model_ema.to(device), device_ids=[device_id])
+            model_ema_dp = DDP(model_ema, device_ids=[device_id])
         else:
             model_ema_dp = model_ema
     else:
@@ -262,10 +281,11 @@ def main():
             if isinstance(model, en_diffusion.EnVariationalDiffusion):
                 wandb.log(model.log_info(), commit=True)
 
-            if not args.break_train_epoch:
+            if not args.break_train_epoch and rank in [-1, 0]:
                 train_test.analyze_and_save(epoch, model_ema, nodes_dist, args,
                                             device, dataset_info, prop_dist,
-                                            n_samples=args.n_stability_samples)
+                                            n_samples=args.n_stability_samples,
+                                            batch_size=20)
             nll_val = train_test.test(args, dataloaders['val'], epoch,
                                       model_ema_dp, device, dtype,
                                       property_norms, nodes_dist, partition='Val')
@@ -301,4 +321,5 @@ def main():
 
 
 if __name__ == "__main__":
+    multiprocessing.set_start_method("spawn")
     main()

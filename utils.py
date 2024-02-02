@@ -61,8 +61,9 @@ def gradient_clipping(flow, gradnorm_queue):
         gradnorm_queue.add(float(grad_norm))
 
     if float(grad_norm) > max_grad_norm:
-        print(f'Clipped gradient with value {grad_norm:.1f} '
-              f'while allowed {max_grad_norm:.1f}')
+        if torch.distributed.get_rank() == 0:
+            print(f'Clipped gradient with value {grad_norm:.1f} '
+                  f'while allowed {max_grad_norm:.1f}')
     return grad_norm
 
 

@@ -7,6 +7,7 @@ from rdkit.Chem.rdmolfiles import MolFromXYZBlock
 from psi4_chain import get_ef
 import ase
 from ase import Atoms
+from ase import units
 from ase.visualize import view
 import os
 import time
@@ -81,15 +82,18 @@ def rdkit_to_ase(rdkit_mol):
 
     return ase_atoms
 
-def get_energy(mol):
+def get_energy(mol, atoms=None):
     #return AllChem.UFFGetMoleculeForceField(mol).CalcEnergy()
 
     #ff = AllChem.MMFFGetMoleculeForceField(mol, AllChem.MMFFGetMoleculeProperties(mol))
     # Get the energy of the current state
     #return ff.CalcEnergy()
 
-    e, f = get_ef(rdkit_to_ase(mol), num_threads=6)
-    return e
+    if atoms is None:
+        e, f = get_ef(rdkit_to_ase(mol), num_threads=32)
+    else:
+        e, f = get_ef(atoms, num_threads=32)
+    return e / (units.kcal / units.mol)
 
 def get_rotatable_bonds(mol):
     """
@@ -198,6 +202,7 @@ def run_mcmc(gs_fn, temperature, n_steps, out_dir):
     n_rejects = 0
     # Run the MCMC
     start_time = time.time()
+    e_time = 0
     for step in range(n_steps):
 
         energies.append(energy - gs_energy)
@@ -211,8 +216,10 @@ def run_mcmc(gs_fn, temperature, n_steps, out_dir):
             new_position = position + 1e-2 * np.random.normal(0, np.sqrt(k_B * temperature), 3)
             conf.SetAtomPosition(i, new_position)
 
+        s = time.time()
         # Get the energy of the new state
         new_energy = get_energy(rdkit_mol)
+        e_time += time.time() - s
 
         # Accept or reject the new state based on the Metropolis criterion
         if np.random.rand() < np.exp((energy - new_energy) / (k_B * temperature)):
@@ -235,7 +242,7 @@ def run_mcmc(gs_fn, temperature, n_steps, out_dir):
             ase.io.write(os.path.join(out_dir, "step_{:0>4d}.xyz".format(step)), atoms)
 
 
-    print("time", time.time() - start_time)
+    print("time", time.time() - start_time, e_time)
     # Convert the energies to a numpy array for further processing
     energies = np.array(energies)
     dihedrals = np.array(dihedrals)
